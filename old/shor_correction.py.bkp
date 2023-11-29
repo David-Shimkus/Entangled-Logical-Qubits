@@ -1,0 +1,162 @@
+# File: shor_correction.py
+# Demonstrates the 9 qubit error correction code. 
+# 
+# Revision History
+# August XX, 2023 - David Shimkus - Ported code from previous project.
+# September 1X, 2023 - David Shimkus - Changed into GPU implementation.  Noise model introduced.  
+# September 23, 2023 - David Shimkus - More parameters and clarity given.  
+
+import time
+start_time = time.time()
+
+import numpy as np
+
+from qiskit import *
+from qiskit import QuantumRegister
+from qiskit import ClassicalRegister
+from qiskit import QuantumCircuit
+from qiskit.circuit.library import *
+from qiskit_aer import AerSimulator
+import qiskit_aer.noise as noise
+
+#### circuit "hyper" parameters ######################################
+shots  = 1000
+depth  = 10
+#number_qubits = 28 #max that can be done on two T600's it seems 
+number_qubits = 24
+number_blocking_qubits = 22
+
+my_simulator = AerSimulator(method='statevector',device='GPU')
+#my_simulator = AerSimulator(method='statevector')
+######################################################################
+
+#### error parameters ################################################
+#https://qiskit.org/ecosystem/aer/apidocs/aer_noise.html
+
+prob_1 = 0.00 # 1-qubit gate
+prob_2 = 0.00  # 2-qubit gate
+
+# Depolarizing quantum errors
+error_1 = noise.depolarizing_error(prob_1, 1)
+error_2 = noise.depolarizing_error(prob_2, 2)
+
+# Add errors to noise model
+noise_model = noise.NoiseModel()
+noise_model.add_all_qubit_quantum_error(error_1, ['u1', 'u2', 'u3'])
+noise_model.add_all_qubit_quantum_error(error_2, ['cx'])
+
+# Get basis gates from noise model - these are passed in as a parameter to the execution
+basis_gates = noise_model.basis_gates
+
+######################################################################
+
+q = QuantumRegister(1,'q')
+c = ClassicalRegister(1,'c')
+
+circuit = QuantumCircuit(q,c)
+
+circuit.h(q[0]) #initialize the superposition
+
+#### error here ####
+circuit.x(q[0])
+circuit.z(q[0])
+###################
+
+circuit.h(q[0])
+
+circuit.barrier(q)
+
+circuit.measure(q[0],c[0])
+
+#multi GPU
+result = execute(circuit, my_simulator, shots=shots, 
+        blocking_enable=True, blocking_qubits=number_blocking_qubits).result() 
+
+counts = result.get_counts()
+
+print('\n')
+print("Uncorrected bit flip and phase error")
+print("--------------------------------------")
+print(counts)
+print("--------------------------------------")
+
+
+#####Shor code starts here ########
+q = QuantumRegister(9,'q')
+c = ClassicalRegister(1,'c')
+
+circuit = QuantumCircuit(q,c)
+
+circuit.cx(q[0],q[3])
+circuit.cx(q[0],q[6])
+
+circuit.h(q[0])
+circuit.h(q[3])
+circuit.h(q[6])
+
+circuit.cx(q[0],q[1])
+circuit.cx(q[3],q[4])
+circuit.cx(q[6],q[7])
+
+circuit.cx(q[0],q[2])
+circuit.cx(q[3],q[5])
+circuit.cx(q[6],q[8])
+
+circuit.barrier(q)
+
+####error here############
+circuit.x(q[0])#Bit flip error
+circuit.z(q[0])#Phase flip error
+############################
+
+circuit.barrier(q)
+circuit.cx(q[0],q[1])
+circuit.cx(q[3],q[4])
+circuit.cx(q[6],q[7])
+
+circuit.cx(q[0],q[2])
+circuit.cx(q[3],q[5])
+circuit.cx(q[6],q[8])
+
+circuit.ccx(q[1],q[2],q[0])
+circuit.ccx(q[4],q[5],q[3])
+circuit.ccx(q[8],q[7],q[6])
+
+circuit.h(q[0])
+circuit.h(q[3])
+circuit.h(q[6])
+
+circuit.cx(q[0],q[3])
+circuit.cx(q[0],q[6])
+circuit.ccx(q[6],q[3],q[0])
+
+circuit.barrier(q)
+
+circuit.measure(q[0],c[0])
+
+#multi GPU
+backend = AerSimulator(noise_model=noise_model, #coupling_map=coupling_map,
+                       basis_gates=basis_gates)
+transpiled_circuit = transpile(circuit, backend)
+
+result = execute(transpiled_circuit, my_simulator, shots=shots,
+        blocking_enable=True, blocking_qubits=number_blocking_qubits).result()
+
+counts = result.get_counts()
+
+print('\n')
+print("----------------------------------------")
+print("\nShor code with bit flip and phase error")
+print("----------------------------------------")
+print(counts)
+
+circuit.draw(output='mpl', filename='shorcode.png')
+
+print('\n')
+print('Shots: ' + str(shots))
+print('Depth: ' + str(depth))
+print('Number of Qubits: ' + str(number_qubits))
+print('Number of "Blocking" Qubits: ' + str(number_blocking_qubits))
+
+finish_time = time.time() - start_time
+print('Time: ' + str(finish_time) + ' seconds')
